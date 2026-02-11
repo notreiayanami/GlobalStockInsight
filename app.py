@@ -7,7 +7,50 @@ import os
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
 CORS(app)
+# ============ CACHE SYSTEM ============
+cache = {}
+CACHE_TTL = 3600  # 1 JAM cache (bukan 10 menit!)
 
+def get_stock_data(symbol):
+    """Get stock data dengan fallback chain"""
+    symbol = symbol.upper().strip()
+    
+    # Check cache FIRST
+    cache_key = f"stock_data:{symbol}"
+    cached = get_cache(cache_key)
+    if cached:
+        print(f"[CACHE] Using cached data for {symbol}")
+        return cached
+    
+    try:
+        print(f"[1] Trying yfinance for {symbol}...")
+        ticker = yf.Ticker(symbol)
+        data = ticker.info
+        
+        if data and len(data) > 0:
+            print(f"✓ Got yfinance data for {symbol}")
+            set_cache(cache_key, data)  # Cache selama 1 jam
+            return data
+    except Exception as e:
+        print(f"✗ yfinance failed: {str(e)[:50]}")
+    
+    # Fallback ke Alpha Vantage
+    try:
+        print(f"[2] Trying Alpha Vantage for {symbol}...")
+        # ... Alpha Vantage code ...
+        set_cache(cache_key, result)
+        return result
+    except Exception as e:
+        print(f"✗ Alpha Vantage failed: {str(e)[:50]}")
+    
+    # Fallback ke Mock Data
+    if symbol in MOCK_DATA:
+        print(f"⚠ Using mock data for {symbol}")
+        set_cache(cache_key, MOCK_DATA[symbol])
+        return MOCK_DATA[symbol]
+    
+    return None
+    
 # ============ MOCK DATA (FALLBACK) ============
 MOCK_DATA = {
     'AAPL': {
