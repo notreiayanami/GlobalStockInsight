@@ -3,7 +3,6 @@ from functools import wraps
 from flask import Flask, jsonify, request, render_template
 from flask_cors import CORS
 import yfinance as yf
-from datetime import datetime, timedelta
 import os
 
 app = Flask(__name__, template_folder='templates', static_folder='static')
@@ -21,6 +20,10 @@ MOCK_DATA = {
         'priceToBook': 45.2,
         'marketCap': 2900000000000,
         'volume': 52000000,
+        'fiftyTwoWeekHigh': 199.62,
+        'fiftyTwoWeekLow': 164.08,
+        'fiftyDayAverage': 187.45,
+        'twoHundredDayAverage': 181.32,
     },
     'TSLA': {
         'longName': 'Tesla Inc.',
@@ -32,6 +35,10 @@ MOCK_DATA = {
         'priceToBook': 15.8,
         'marketCap': 620000000000,
         'volume': 120000000,
+        'fiftyTwoWeekHigh': 278.63,
+        'fiftyTwoWeekLow': 138.80,
+        'fiftyDayAverage': 216.45,
+        'twoHundredDayAverage': 207.12,
     },
     'GOOGL': {
         'longName': 'Alphabet Inc.',
@@ -43,6 +50,10 @@ MOCK_DATA = {
         'priceToBook': 5.8,
         'marketCap': 1850000000000,
         'volume': 18000000,
+        'fiftyTwoWeekHigh': 198.08,
+        'fiftyTwoWeekLow': 102.21,
+        'fiftyDayAverage': 168.32,
+        'twoHundredDayAverage': 155.67,
     }
 }
 
@@ -64,31 +75,7 @@ def set_cache(key, value):
     """Set value in cache with timestamp"""
     cache[key] = (time.time(), value)
 
-# ============ RATE LIMITING ============
-request_times = {}
-
-def rate_limit(max_requests=5, time_window=60):
-    """Rate limit per endpoint"""
-    def decorator(func):
-        @wraps(func)
-        def wrapper(*args, **kwargs):
-            client_ip = request.remote_addr
-            key = f"{func.__name__}:{client_ip}"
-            now = time.time()
-            
-            if key not in request_times:
-                request_times[key] = []
-            
-            request_times[key] = [t for t in request_times[key] if now - t < time_window]
-            
-            if len(request_times[key]) >= max_requests:
-                return jsonify({"error": "Rate limit exceeded. Please wait."}), 429
-            
-            request_times[key].append(now)
-            return func(*args, **kwargs)
-        return wrapper
-    return decorator
-
+# ============ HELPER FUNCTIONS ============
 def safe_get(data, key, default='N/A'):
     """Safely get value from dict"""
     try:
@@ -110,40 +97,37 @@ def safe_float(value, decimals=2):
     except:
         return 'N/A'
 
-def try_yfinance(symbol):
-    """Try to fetch from yfinance, return None if fails"""
-    try:
-        ticker = yf.Ticker(symbol, timeout=10)
-        data = ticker.info
-        
-        if data and len(data) > 0:
-            return data
-        return None
-    except Exception as e:
-        print(f"yfinance error for {symbol}: {str(e)}")
-        return None
-
 def get_stock_data(symbol):
     """Get stock data from yfinance or fallback to mock data"""
     symbol = symbol.upper().strip()
     
-    # Try yfinance first
-    data = try_yfinance(symbol)
+    try:
+        # REMOVED timeout parameter - yfinance doesn't support it
+        ticker = yf.Ticker(symbol)
+        data = ticker.info
+        
+        if data and len(data) > 0:
+            print(f"✓ Got real data for {symbol}")
+            return data
+    except Exception as e:
+        print(f"yfinance error for {symbol}: {str(e)}")
     
-    # Fallback to mock data if available
-    if not data and symbol in MOCK_DATA:
-        print(f"Using fallback data for {symbol}")
-        data = MOCK_DATA[symbol]
+    # Fallback to mock data
+    if symbol in MOCK_DATA:
+        print(f"⚠ Using fallback data for {symbol}")
+        return MOCK_DATA[symbol]
     
-    return data
+    return None
 
 def get_history_data(symbol, period='5d'):
     """Get history data from yfinance"""
     try:
-        ticker = yf.Ticker(symbol, timeout=10)
+        # REMOVED timeout parameter
+        ticker = yf.Ticker(symbol)
         hist = ticker.history(period=period)
         return hist if not hist.empty else None
-    except:
+    except Exception as e:
+        print(f"Error getting history for {symbol}: {str(e)}")
         return None
 
 # ============ SERVE FRONTEND ============
@@ -157,7 +141,6 @@ def status():
 
 # ============ STOCK ENDPOINT ============
 @app.route('/api/stock/<symbol>')
-@rate_limit(max_requests=5, time_window=60)
 def stock(symbol):
     try:
         cache_key = f"stock:{symbol}"
@@ -179,7 +162,7 @@ def stock(symbol):
         hist = get_history_data(symbol, '5d')
         
         current_price = info.get('currentPrice')
-        if current_price is None and hist is not None:
+        if current_price is None and hist is not None and not hist.empty:
             current_price = float(hist['Close'].iloc[-1])
         elif current_price is None:
             current_price = 0
@@ -188,7 +171,7 @@ def stock(symbol):
         
         change = 0
         pct = 0
-        if hist is not None and len(hist) > 1:
+        if hist is not None and not hist.empty and len(hist) > 1:
             prev_price = float(hist['Close'].iloc[-2])
             change = current_price - prev_price
             pct = (change / prev_price * 100) if prev_price > 0 else 0
@@ -216,7 +199,6 @@ def stock(symbol):
 
 # ============ CHART ENDPOINT ============
 @app.route('/api/chart/<symbol>')
-@rate_limit(max_requests=5, time_window=60)
 def chart(symbol):
     try:
         cache_key = f"chart:{symbol}"
@@ -244,7 +226,6 @@ def chart(symbol):
 
 # ============ CHART EXTENDED ENDPOINT ============
 @app.route('/api/chart-extended/<symbol>/<timeframe>')
-@rate_limit(max_requests=3, time_window=60)
 def chart_extended(symbol, timeframe):
     try:
         cache_key = f"chart-extended:{symbol}:{timeframe}"
@@ -292,7 +273,6 @@ def chart_extended(symbol, timeframe):
 
 # ============ METRICS ENDPOINT ============
 @app.route('/api/metrics/<symbol>')
-@rate_limit(max_requests=3, time_window=60)
 def metrics(symbol):
     try:
         cache_key = f"metrics:{symbol}"
@@ -349,7 +329,6 @@ def metrics(symbol):
 
 # ============ INFO ENDPOINT ============
 @app.route('/api/info/<symbol>')
-@rate_limit(max_requests=3, time_window=60)
 def info(symbol):
     try:
         cache_key = f"info:{symbol}"
@@ -414,7 +393,6 @@ def info(symbol):
 
 # ============ FINANCIALS ENDPOINT ============
 @app.route('/api/financials/<symbol>')
-@rate_limit(max_requests=3, time_window=60)
 def financials(symbol):
     try:
         cache_key = f"financials:{symbol}"
@@ -463,7 +441,6 @@ def financials(symbol):
 
 # ============ VALUATION ENDPOINT ============
 @app.route('/api/valuation/<symbol>')
-@rate_limit(max_requests=3, time_window=60)
 def valuation(symbol):
     try:
         cache_key = f"valuation:{symbol}"
@@ -507,10 +484,6 @@ def valuation(symbol):
         return jsonify({"error": "Failed to fetch valuation"}), 500
 
 # ============ ERROR HANDLERS ============
-@app.errorhandler(429)
-def ratelimit_handler(e):
-    return jsonify({"error": "Too many requests. Please wait."}), 429
-
 @app.errorhandler(404)
 def not_found(e):
     return jsonify({"error": "Endpoint not found"}), 404
