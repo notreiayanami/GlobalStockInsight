@@ -2,7 +2,7 @@ const API = window.location.origin;
 let chart = null;
 let isLoading = false;
 let currentTimeframe = '1y';
-let currentSymbol = 'BBRI.JK';
+let currentSymbol = 'AAPL';  // ← UBAH DARI 'BBRI.JK'
 let currentLanguage = localStorage.getItem('language') || 'EN';
 
 let currentCompanyInfo = null;
@@ -657,6 +657,22 @@ langBtn.addEventListener("click", () => {
   localStorage.setItem('language', currentLanguage);
   updateLanguage();
   rippleEffect(event);
+});
+window.addEventListener("load", () => {
+  initTheme();
+  updateLanguageButton();
+  updateLanguage();
+
+  document.querySelectorAll("nav, .container, footer").forEach((el, index) => {
+    el.style.animation = `fadeInUp 0.6s ease-out ${0.1 * index}s both`;
+  });
+
+  const timeframeButtons = document.querySelectorAll(".timeframe-btn");
+  timeframeButtons.forEach((btn, index) => {
+    if (index === 3) btn.classList.add("active");
+  });
+
+  loadData("AAPL");  // ← UBAH DARI 'BBRI.JK'
 });
 
 // ============ RIPPLE EFFECT ============
