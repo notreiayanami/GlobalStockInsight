@@ -81,11 +81,11 @@ def index():
 
 @app.route('/api/status')
 def status():
-    return jsonify({"status": "ok"})
+    return jsonify({"status": "ok", "cache_size": len(cache)})
 
 # ============ STOCK ENDPOINT ============
 @app.route('/api/stock/<symbol>')
-@rate_limit(max_requests=3, time_window=60)
+@rate_limit(max_requests=5, time_window=60)
 def stock(symbol):
     try:
         cache_key = f"stock:{symbol}"
@@ -94,50 +94,67 @@ def stock(symbol):
             return jsonify(cached)
         
         symbol = symbol.upper().strip()
+        
+        # Validate symbol
+        if not symbol or len(symbol) > 10:
+            return jsonify({"error": "Invalid symbol"}), 400
+        
         ticker = yf.Ticker(symbol)
         
-        # Add timeout and retries
-        hist = ticker.history(period="7d")
-        
-        if hist.empty:
-            return jsonify({"error": "Not found"}), 404
-        
-        info = ticker.info
-        current_price = info.get('currentPrice')
-        
-        if current_price is None:
-            current_price = float(hist['Close'].iloc[-1])
-        else:
-            current_price = float(current_price)
-        
-        prev_price = float(hist['Close'].iloc[-2]) if len(hist) > 1 else float(hist['Close'].iloc[-1])
-        change = current_price - prev_price
-        pct = (change / prev_price * 100) if prev_price > 0 else 0
-        
-        volume = info.get('volume', 0) or 0
-        market_cap = info.get('marketCap', 'N/A')
-        
-        result = {
-            "symbol": symbol,
-            "name": safe_get(info, 'longName', symbol),
-            "price": round(current_price, 2),
-            "change": round(change, 2),
-            "change_pct": round(pct, 2),
-            "status": "up" if change >= 0 else "down",
-            "volume": int(volume) if volume else 0,
-            "marketcap": market_cap
-        }
-        
-        set_cache(cache_key, result)
-        return jsonify(result)
+        try:
+            # Use shorter period first
+            hist = ticker.history(period="5d")
+            
+            if hist.empty:
+                return jsonify({"error": f"Symbol '{symbol}' not found or no data available"}), 404
+            
+            info = ticker.info
+            
+            if not info:
+                return jsonify({"error": f"No data available for '{symbol}'"}), 404
+            
+            current_price = info.get('currentPrice')
+            
+            if current_price is None:
+                current_price = float(hist['Close'].iloc[-1])
+            else:
+                try:
+                    current_price = float(current_price)
+                except:
+                    current_price = float(hist['Close'].iloc[-1])
+            
+            prev_price = float(hist['Close'].iloc[-2]) if len(hist) > 1 else float(hist['Close'].iloc[-1])
+            change = current_price - prev_price
+            pct = (change / prev_price * 100) if prev_price > 0 else 0
+            
+            volume = info.get('volume', 0) or 0
+            market_cap = info.get('marketCap', 'N/A')
+            
+            result = {
+                "symbol": symbol,
+                "name": safe_get(info, 'longName', symbol),
+                "price": round(current_price, 2),
+                "change": round(change, 2),
+                "change_pct": round(pct, 2),
+                "status": "up" if change >= 0 else "down",
+                "volume": int(volume) if volume else 0,
+                "marketcap": market_cap
+            }
+            
+            set_cache(cache_key, result)
+            return jsonify(result)
+            
+        except Exception as inner_error:
+            print(f"Error fetching {symbol}: {str(inner_error)}")
+            return jsonify({"error": f"Could not fetch data for '{symbol}'. Please try another symbol."}), 500
         
     except Exception as e:
         print(f"Error in stock endpoint: {str(e)}")
-        return jsonify({"error": "Failed to fetch stock data. Please try again."}), 500
+        return jsonify({"error": "Server error. Please try again."}), 500
 
 # ============ CHART ENDPOINT ============
 @app.route('/api/chart/<symbol>')
-@rate_limit(max_requests=3, time_window=60)
+@rate_limit(max_requests=5, time_window=60)
 def chart(symbol):
     try:
         cache_key = f"chart:{symbol}"
@@ -147,7 +164,7 @@ def chart(symbol):
         
         symbol = symbol.upper().strip()
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period="7d")
+        hist = ticker.history(period="5d")
         
         if hist.empty:
             return jsonify({"error": "Not found"}), 404
@@ -181,7 +198,12 @@ def chart_extended(symbol, timeframe):
             timeframe = '1y'
         
         ticker = yf.Ticker(symbol)
-        hist = ticker.history(period=timeframe)
+        
+        try:
+            hist = ticker.history(period=timeframe)
+        except:
+            # Fallback to 1y if specified period fails
+            hist = ticker.history(period='1y')
         
         if hist.empty:
             return jsonify({"error": "Not found"}), 404
@@ -222,7 +244,14 @@ def metrics(symbol):
         
         symbol = symbol.upper().strip()
         ticker = yf.Ticker(symbol)
-        data = ticker.info
+        
+        try:
+            data = ticker.info
+        except:
+            return jsonify({"error": f"Could not fetch metrics for '{symbol}'"}), 500
+        
+        if not data:
+            return jsonify({"error": f"No data available for '{symbol}'"}), 404
         
         # Helper for percentage values
         def get_percentage(key):
@@ -278,7 +307,14 @@ def info(symbol):
         
         symbol = symbol.upper().strip()
         ticker = yf.Ticker(symbol)
-        data = ticker.info
+        
+        try:
+            data = ticker.info
+        except:
+            return jsonify({"error": f"Could not fetch info for '{symbol}'"}), 500
+        
+        if not data:
+            return jsonify({"error": f"No data available for '{symbol}'"}), 404
         
         ceo = 'N/A'
         try:
@@ -341,7 +377,14 @@ def financials(symbol):
         
         symbol = symbol.upper().strip()
         ticker = yf.Ticker(symbol)
-        data = ticker.info
+        
+        try:
+            data = ticker.info
+        except:
+            return jsonify({"error": f"Could not fetch financials for '{symbol}'"}), 500
+        
+        if not data:
+            return jsonify({"error": f"No data available for '{symbol}'"}), 404
         
         result = {
             "symbol": symbol,
@@ -388,7 +431,14 @@ def valuation(symbol):
         
         symbol = symbol.upper().strip()
         ticker = yf.Ticker(symbol)
-        data = ticker.info
+        
+        try:
+            data = ticker.info
+        except:
+            return jsonify({"error": f"Could not fetch valuation for '{symbol}'"}), 500
+        
+        if not data:
+            return jsonify({"error": f"No data available for '{symbol}'"}), 404
         
         result = {
             "symbol": symbol,
@@ -423,6 +473,14 @@ def valuation(symbol):
 @app.errorhandler(429)
 def ratelimit_handler(e):
     return jsonify({"error": "Too many requests. Please wait before trying again."}), 429
+
+@app.errorhandler(404)
+def not_found(e):
+    return jsonify({"error": "Endpoint not found"}), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    return jsonify({"error": "Server error. Please try again later."}), 500
 
 if __name__ == '__main__':
     print("\n" + "="*60)
